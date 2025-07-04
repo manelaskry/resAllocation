@@ -118,8 +118,18 @@ pipeline {
             steps {
                 echo 'Preparing test environment...'
                 bat '''
-                    REM Install dependencies
+                    REM Fix missing dependencies first
+                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer require symfony/runtime --no-interaction || echo "Runtime package handled"
+                    
+                    REM Install all dependencies
                     docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer install --no-interaction --optimize-autoloader
+                    
+                    REM Verify console works
+                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console --version || (
+                        echo "Console not working, checking dependencies..."
+                        docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer show | grep symfony/runtime || echo "Runtime package missing"
+                        exit /b 1
+                    )
                     
                     REM Create test database (ignore if exists)
                     docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:database:create --env=test --if-not-exists || echo "Test database creation handled"

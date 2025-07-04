@@ -62,6 +62,11 @@ services:
         if [ ! -d vendor ] || [ ! -f vendor/autoload.php ]; then
           composer install --optimize-autoloader --no-interaction;
         fi &&
+        if [ ! -f vendor/autoload.php ]; then
+          echo 'Composer install failed, trying to fix dependencies...' &&
+          composer require symfony/runtime --no-interaction &&
+          composer install --optimize-autoloader --no-interaction;
+        fi &&
         mkdir -p config/jwt &&
         if [ ! -f config/jwt/private.pem ]; then
           openssl genpkey -out config/jwt/private.pem -algorithm rsa -pkeyopt rsa_keygen_bits:4096 &&
