@@ -8,26 +8,65 @@ pipeline {
             }
         }
         
-        stage('Start Services') {
+        stage('Docker Cleanup') {
             steps {
-                timeout(time: 5, unit: 'MINUTES') {
+                timeout(time: 2, unit: 'MINUTES') {
                     bat '''
-                        docker-compose down || exit /b 0
-                        docker-compose up -d
-                        timeout /t 30 /nobreak > nul
+                        docker-compose down --volumes --remove-orphans || exit /b 0
+                        docker system prune -f || exit /b 0
+                        docker network prune -f || exit /b 0
+                    '''
+                }
+            }
+        }
+        
+        stage('Docker Build') {
+            steps {
+                timeout(time: 10, unit: 'MINUTES') {
+                    bat '''
+                        echo "Starting Docker Compose build..."
+                        docker-compose up -d --build --force-recreate
+                        echo "Checking container status..."
                         docker-compose ps
                     '''
                 }
             }
         }
         
-        stage('Run Tests') {
+        stage('Install Composer') {
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
                     bat '''
-                        docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php --testdox
-                        docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/UserTest.php --testdox
+                        echo "Installing Composer..."
+                        docker-compose exec -T backend php -r "copy('https://getcomposer.org/installer', 'composer-setup.php');"
+                        docker-compose exec -T backend php composer-setup.php --install-dir=/usr/local/bin --filename=composer
+                        docker-compose exec -T backend rm composer-setup.php
+                        docker-compose exec -T backend composer --version
                     '''
+                }
+            }
+        }
+        
+        stage('Install Dependencies') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    bat 'docker-compose exec -T backend composer install --no-interaction --prefer-dist'
+                }
+            }
+        }
+        
+        stage('Run Project Tests') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    bat 'docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php --testdox'
+                }
+            }
+        }
+        
+        stage('Run User Tests') {
+            steps {
+                timeout(time: 5, unit: 'MINUTES') {
+                    bat 'docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/UserTest.php --testdox'
                 }
             }
         }
@@ -36,13 +75,22 @@ pipeline {
     post {
         always {
             echo 'Tests terminés!'
-            bat 'docker-compose down || exit /b 0'
+            timeout(time: 2, unit: 'MINUTES') {
+                bat '''
+                    docker-compose logs --tail=50 || exit /b 0
+                    docker-compose down --volumes --remove-orphans || exit /b 0
+                '''
+            }
         }
         success {
             echo 'Tous les tests sont passés ✅'
         }
         failure {
             echo 'Certains tests ont échoué ❌'
+            bat '''
+                echo "Container logs:"
+                docker-compose logs || exit /b 0
+            '''
         }
     }
 }
