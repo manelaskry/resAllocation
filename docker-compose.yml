@@ -18,18 +18,40 @@ services:
       timeout: 5s
       retries: 5
 
-  backenddd:  # ← Changed from 'backend' to 'backenddd'
+  # Test database for PHPUnit
+  postgres_test:
+    image: postgres:16-alpine
+    container_name: my_app_postgres_test
+    environment:
+      POSTGRES_DB: app_test
+      POSTGRES_USER: root
+      POSTGRES_PASSWORD: root
+    ports:
+      - "5433:5432"
+    volumes:
+      - postgres_test_data:/var/lib/postgresql/data
+    networks:
+      - app_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U root -d app_test"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  backenddd:
     image: php:8.3-fpm
     container_name: my_app_backend
     working_dir: /var/www
     volumes:
-      - ./backenddd:/var/www  # ← Changed from './backend' to './backenddd'
-      - ./backenddd/.env.docker:/var/www/.env  # ← Changed path
-      - backend_vendor:/var/www/vendor  
+      - ./backenddd:/var/www
+      - ./backenddd/.env.docker:/var/www/.env
+      - backend_vendor:/var/www/vendor
     environment:
-      - PHP_OPCACHE_VALIDATE_TIMESTAMPS=1 
-      - PHP_OPCACHE_REVALIDATE_FREQ=0      
-    command: > 
+      - PHP_OPCACHE_VALIDATE_TIMESTAMPS=1
+      - PHP_OPCACHE_REVALIDATE_FREQ=0
+      - DATABASE_URL=postgresql://root:root@postgres:5432/app
+      - DATABASE_TEST_URL=postgresql://root:root@postgres_test:5432/app_test
+    command: >
       sh -c "
         if [ ! -f /tmp/setup_done ]; then
           apt-get update && apt-get install -y git curl libpng-dev libonig-dev libxml2-dev libpq-dev libzip-dev zip unzip inotify-tools &&
@@ -56,6 +78,8 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
+      postgres_test:
+        condition: service_healthy
     networks:
       - app_network
     healthcheck:
@@ -70,16 +94,16 @@ services:
     working_dir: /app
     volumes:
       - ./frontend:/app
-      - frontend_node_modules:/app/node_modules  
+      - frontend_node_modules:/app/node_modules
     command: sh -c "npm install && npm start"
     ports:
       - "3000:3000"
     environment:
       - CHOKIDAR_USEPOLLING=true
-      - REACT_APP_API_URL=http://localhost:8081/api 
-      - WATCHPACK_POLLING=true  
+      - REACT_APP_API_URL=http://localhost:8081/api
+      - WATCHPACK_POLLING=true
     depends_on:
-      backenddd:  # ← Changed from 'backend' to 'backenddd'
+      backenddd:
         condition: service_healthy
     networks:
       - app_network
@@ -90,20 +114,21 @@ services:
     ports:
       - "8081:80"
     volumes:
-      - ./backenddd:/var/www  # ← Changed from './backend' to './backenddd'
-      - ./backenddd/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf  # ← Changed path
+      - ./backenddd:/var/www
+      - ./backenddd/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf
     depends_on:
-      backenddd:  # ← Changed from 'backend' to 'backenddd'
+      backenddd:
         condition: service_healthy
-      frontend:  
+      frontend:
         condition: service_started
     networks:
       - app_network
 
 volumes:
   postgres_data:
-  backend_vendor:      
-  frontend_node_modules:  
+  postgres_test_data:
+  backend_vendor:
+  frontend_node_modules:
 
 networks:
   app_network:
