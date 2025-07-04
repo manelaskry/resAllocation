@@ -1,9 +1,5 @@
 pipeline {
     agent any
-    
-    triggers {
-        cron('0 2 * * *')
-    }
 
     stages {
         stage('Clone Repository') {
