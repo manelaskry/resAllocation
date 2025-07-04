@@ -21,14 +21,6 @@ pipeline {
             }
         }
         
-        stage('Install Dependencies') {
-            steps {
-                timeout(time: 5, unit: 'MINUTES') {
-                    bat 'docker-compose exec -T backend composer install --no-interaction'
-                }
-            }
-        }
-        
         stage('Run Tests') {
             steps {
                 timeout(time: 5, unit: 'MINUTES') {
