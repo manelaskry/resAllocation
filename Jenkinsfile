@@ -23,7 +23,7 @@ pipeline {
                     
                     REM Run tests directly (dependencies already installed)
                     echo "Running PHPUnit tests..."
-                    docker compose exec backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php –testdox
+                    docker compose exec backenddd ./vendor/bin/phpunit tests/Entity/ProjectTest.php –testdox
                     
                     docker-compose down
                 '''
