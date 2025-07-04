@@ -1,235 +1,63 @@
 pipeline {
     agent any
     
-    environment {
-        COMPOSE_PROJECT_NAME = "myapp_${BUILD_NUMBER}"
-        DOCKER_BUILDKIT = "1"
-        COMPOSE_DOCKER_CLI_BUILD = "1"
-    }
-    
     triggers {
-        // Run every day at 2 AM
         cron('0 2 * * *')
     }
-    
+
     stages {
         stage('Checkout') {
             steps {
-                echo 'Checking out code...'
                 git branch: 'master', url: 'https://github.com/manelaskry/resAllocation.git'
             }
         }
         
-        stage('Environment Setup') {
+        stage('Test') {
             steps {
-                script {
-                    echo 'Setting up environment...'
-                    // Clean up any existing containers
+                timeout(time: 15, unit: 'MINUTES') {
                     bat '''
-                        docker-compose -p %COMPOSE_PROJECT_NAME% down --volumes --remove-orphans 2>nul || echo "No containers to clean"
-                        docker system prune -f 2>nul || echo "Cleanup completed"
+                        REM Clean up
+                        docker-compose down --volumes --remove-orphans || exit /b 0
+                        
+                        REM Start containers
+                        docker-compose up -d
+                        
+                        REM Wait for containers
+                        echo "Waiting for containers to start..."
+                        ping 127.0.0.1 -n 121 > nul
+                        
+                        REM Check container status
+                        docker-compose ps
+                        
+                        REM Check if backend container exists
+                        docker-compose ps backenddd || (
+                            echo "Backend container not found, checking logs:"
+                            docker-compose logs backenddd
+                            exit /b 1
+                        )
+                        
+                        REM Run tests
+                        docker-compose exec -T backenddd ./vendor/bin/phpunit tests/ --testdox
+                        
+                        REM Cleanup
+                        docker-compose down
                     '''
                 }
-            }
-        }
-        
-        stage('Build and Start Services') {
-            steps {
-                echo 'Building and starting services...'
-                bat '''
-                    REM Start all services
-                    docker-compose -p %COMPOSE_PROJECT_NAME% up -d
-                    
-                    REM Wait for services to be healthy
-                    echo "Waiting for services to be healthy..."
-                    docker-compose -p %COMPOSE_PROJECT_NAME% ps
-                    
-                    REM Wait for backend to be healthy (not just running)
-                    ping 127.0.0.1 -n 61 > nul
-                '''
-            }
-        }
-        
-        stage('Wait for Database') {
-            steps {
-                echo 'Waiting for databases to be ready...'
-                script {
-                    // Retry mechanism for database readiness
-                    def maxAttempts = 30
-                    def attempt = 0
-                    def dbReady = false
-                    
-                    while (!dbReady && attempt < maxAttempts) {
-                        try {
-                            bat '''
-                                docker-compose -p %COMPOSE_PROJECT_NAME% exec -T postgres pg_isready -U root -d app
-                                docker-compose -p %COMPOSE_PROJECT_NAME% exec -T postgres_test pg_isready -U root -d app_test
-                            '''
-                            dbReady = true
-                            echo "Databases are ready!"
-                        } catch (Exception e) {
-                            attempt++
-                            echo "Database not ready yet, attempt ${attempt}/${maxAttempts}"
-                            sleep(5)
-                        }
-                    }
-                    
-                    if (!dbReady) {
-                        error "Databases failed to start after ${maxAttempts} attempts"
-                    }
-                }
-            }
-        }
-        
-        stage('Wait for Backend') {
-            steps {
-                echo 'Waiting for backend to be ready...'
-                script {
-                    def maxAttempts = 60
-                    def attempt = 0
-                    def backendReady = false
-                    
-                    while (!backendReady && attempt < maxAttempts) {
-                        try {
-                            // Check if container is running first
-                            def containerStatus = bat(
-                                script: '''
-                                    docker-compose -p %COMPOSE_PROJECT_NAME% ps backenddd --format "{{.Status}}"
-                                ''',
-                                returnStdout: true
-                            ).trim()
-                            
-                            echo "Container status: ${containerStatus}"
-                            
-                            if (containerStatus.contains("Up")) {
-                                // Container is running, check if it's ready
-                                bat '''
-                                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd test -f /tmp/setup_done
-                                '''
-                                backendReady = true
-                                echo "Backend is ready!"
-                            } else {
-                                echo "Backend container is not running. Status: ${containerStatus}"
-                                // Try to restart the container
-                                bat '''
-                                    echo "Attempting to restart backend container..."
-                                    docker-compose -p %COMPOSE_PROJECT_NAME% restart backenddd
-                                '''
-                                sleep(10)
-                                attempt++
-                            }
-                        } catch (Exception e) {
-                            attempt++
-                            echo "Backend not ready yet, attempt ${attempt}/${maxAttempts}"
-                            echo "Error: ${e.getMessage()}"
-                            
-                            // Show container logs every 10 attempts
-                            if (attempt % 10 == 0) {
-                                bat '''
-                                    echo "=== Backend Container Logs (last 20 lines) ==="
-                                    docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=20 backenddd
-                                    echo "=== Container Status ==="
-                                    docker-compose -p %COMPOSE_PROJECT_NAME% ps backenddd
-                                '''
-                            }
-                            sleep(3)
-                        }
-                    }
-                    
-                    if (!backendReady) {
-                        bat '''
-                            echo "Backend setup failed, showing detailed logs:"
-                            docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd
-                            echo "Container status:"
-                            docker-compose -p %COMPOSE_PROJECT_NAME% ps
-                            echo "Container inspection:"
-                            docker inspect $(docker-compose -p %COMPOSE_PROJECT_NAME% ps -q backenddd) 2>nul || echo "Container not found"
-                        '''
-                        error "Backend failed to start after ${maxAttempts} attempts"
-                    }
-                }
-            }
-        }
-        
-        stage('Prepare Test Environment') {
-            steps {
-                echo 'Preparing test environment...'
-                bat '''
-                    REM Fix missing dependencies first
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer require symfony/runtime --no-interaction || echo "Runtime package handled"
-                    
-                    REM Install all dependencies
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer install --no-interaction --optimize-autoloader
-                    
-                    REM Verify console works
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console --version || (
-                        echo "Console not working, checking dependencies..."
-                        docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer show | grep symfony/runtime || echo "Runtime package missing"
-                        exit /b 1
-                    )
-                    
-                    REM Create test database (ignore if exists)
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:database:create --env=test --if-not-exists || echo "Test database creation handled"
-                    
-                    REM Run migrations
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:migrations:migrate --env=test --no-interaction || echo "Migrations completed"
-                    
-                    REM Load fixtures (optional)
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:fixtures:load --env=test --no-interaction || echo "Fixtures loaded or not available"
-                '''
-            }
-        }
-        
-        stage('Run PHPUnit Tests') {
-            steps {
-                echo 'Running PHPUnit tests...'
-                bat '''
-                    REM Verify PHPUnit is available
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --version || (
-                        echo "PHPUnit not found, checking installation..."
-                        docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ls -la vendor/bin/
-                        exit /b 1
-                    )
-                    
-                    REM Run the tests
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --testdox --stop-on-failure
-                '''
             }
         }
     }
     
     post {
         always {
-            echo 'Cleaning up...'
-            bat '''
-                REM Show logs for debugging
-                echo "=== Backend Logs ==="
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=50 backenddd || echo "No backend logs"
-                
-                echo "=== Postgres Logs ==="
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=20 postgres || echo "No postgres logs"
-                
-                echo "=== Test Postgres Logs ==="
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=20 postgres_test || echo "No test postgres logs"
-                
-                REM Clean up
-                docker-compose -p %COMPOSE_PROJECT_NAME% down --volumes --remove-orphans || echo "Cleanup completed"
-            '''
-        }
-        
-        success {
-            echo 'All tests passed! ✅'
-        }
-        
-        failure {
-            echo 'Tests failed ❌'
             bat '''
                 echo "=== Container Status ==="
-                docker-compose -p %COMPOSE_PROJECT_NAME% ps || echo "No containers running"
-                
-                echo "=== Detailed Backend Logs ==="
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd || echo "No detailed logs available"
+                docker-compose ps || exit /b 0
+                echo "=== Backend Logs ==="
+                docker-compose logs backenddd || exit /b 0
+                docker-compose down --volumes --remove-orphans || exit /b 0
             '''
         }
+        success { echo 'Tests passed ✅' }
+        failure { echo 'Tests failed ❌' }
     }
 }
