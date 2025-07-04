@@ -91,37 +91,59 @@ pipeline {
                     
                     while (!backendReady && attempt < maxAttempts) {
                         try {
-                            // First check if container is running
+                            // Check if container is running first
                             def containerStatus = bat(
-                                script: 'docker-compose -p %COMPOSE_PROJECT_NAME% ps -q backenddd',
+                                script: '''
+                                    docker-compose -p %COMPOSE_PROJECT_NAME% ps backenddd --format "{{.Status}}"
+                                ''',
                                 returnStdout: true
                             ).trim()
                             
-                            if (containerStatus) {
-                                // Container exists, now check if setup is done
+                            echo "Container status: ${containerStatus}"
+                            
+                            if (containerStatus.contains("Up")) {
+                                // Container is running, check if it's ready
                                 bat '''
                                     docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd test -f /tmp/setup_done
                                 '''
                                 backendReady = true
                                 echo "Backend is ready!"
                             } else {
-                                echo "Backend container not found, waiting..."
-                                sleep(3)
+                                echo "Backend container is not running. Status: ${containerStatus}"
+                                // Try to restart the container
+                                bat '''
+                                    echo "Attempting to restart backend container..."
+                                    docker-compose -p %COMPOSE_PROJECT_NAME% restart backenddd
+                                '''
+                                sleep(10)
                                 attempt++
                             }
                         } catch (Exception e) {
                             attempt++
                             echo "Backend not ready yet, attempt ${attempt}/${maxAttempts}"
+                            echo "Error: ${e.getMessage()}"
+                            
+                            // Show container logs every 10 attempts
+                            if (attempt % 10 == 0) {
+                                bat '''
+                                    echo "=== Backend Container Logs (last 20 lines) ==="
+                                    docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=20 backenddd
+                                    echo "=== Container Status ==="
+                                    docker-compose -p %COMPOSE_PROJECT_NAME% ps backenddd
+                                '''
+                            }
                             sleep(3)
                         }
                     }
                     
                     if (!backendReady) {
                         bat '''
-                            echo "Backend setup failed, showing logs:"
+                            echo "Backend setup failed, showing detailed logs:"
                             docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd
                             echo "Container status:"
                             docker-compose -p %COMPOSE_PROJECT_NAME% ps
+                            echo "Container inspection:"
+                            docker inspect $(docker-compose -p %COMPOSE_PROJECT_NAME% ps -q backenddd) 2>nul || echo "Container not found"
                         '''
                         error "Backend failed to start after ${maxAttempts} attempts"
                     }
