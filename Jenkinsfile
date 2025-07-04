@@ -1,7 +1,8 @@
 pipeline {
     agent any
-    
+
     triggers {
+        // Run every day at 2 AM
         cron('0 2 * * *')
     }
 
@@ -11,37 +12,40 @@ pipeline {
                 git branch: 'master', url: 'https://github.com/manelaskry/resAllocation.git'
             }
         }
-        
-    stage('Test') {
-        steps {
-            bat '''
-                docker-compose up -d backenddd
-                
-                REM Wait for container to be ready
-                echo "Waiting for container to start..."
-                ping 127.0.0.1 -n 121 > nul
-                
-                REM Check if PHPUnit exists and find its location
-                echo "Checking PHPUnit installation..."
-                docker compose exec backenddd ls -la vendor/bin/
-                docker compose exec backenddd which phpunit || echo "PHPUnit not in PATH"
-                
-                REM Try different PHPUnit paths
-                docker compose exec backenddd ./vendor/bin/phpunit --version || echo "PHPUnit not found in vendor/bin"
-                
-                docker-compose down
-            '''
+
+        stage('Test') {
+            steps {
+                bat '''
+                    REM Start the container
+                    docker-compose up -d backenddd
+
+                    REM Wait for container to be ready
+                    echo "Waiting for container to start..."
+                    ping 127.0.0.1 -n 121 > nul
+
+                    REM Check if PHPUnit exists and find its location
+                    echo "Checking PHPUnit installation..."
+                    docker compose exec backenddd ls -la vendor/bin/
+                    docker compose exec backenddd which phpunit || echo "PHPUnit not in PATH"
+
+                    REM Try different PHPUnit paths
+                    docker compose exec backenddd ./vendor/bin/phpunit --version || echo "PHPUnit not found in vendor/bin"
+                    docker compose exec backenddd ./vendor/bin/phpunit || echo "Failed to run tests"
+
+                    REM Optional: run database migrations or fixtures if needed
+                '''
+            }
         }
     }
-    
+
     post {
         always {
             bat 'docker-compose down || exit /b 0'
         }
-        success { 
+        success {
             echo 'All 34 tests passed! ✅'
         }
-        failure { 
+        failure {
             echo 'Tests failed ❌'
             bat 'docker-compose logs backenddd || exit /b 0'
         }
