@@ -29,14 +29,15 @@ pipeline {
                         REM Check container status
                         docker-compose ps
                         
-                        REM Check if backend container exists
-                        docker-compose ps backenddd || (
-                            echo "Backend container not found, checking logs:"
-                            docker-compose logs backenddd
-                            exit /b 1
-                        )
+                        REM MANUALLY install dependencies
+                        echo "Installing composer dependencies..."
+                        docker-compose exec -T backenddd composer install --no-interaction --optimize-autoloader
+                        
+                        REM Verify PHPUnit exists
+                        docker-compose exec -T backenddd ls -la vendor/bin/phpunit
                         
                         REM Run tests
+                        echo "Running tests..."
                         docker-compose exec -T backenddd ./vendor/bin/phpunit tests/ --testdox
                         
                         REM Cleanup
@@ -49,15 +50,15 @@ pipeline {
     
     post {
         always {
-            bat '''
-                echo "=== Container Status ==="
-                docker-compose ps || exit /b 0
-                echo "=== Backend Logs ==="
-                docker-compose logs backenddd || exit /b 0
-                docker-compose down --volumes --remove-orphans || exit /b 0
-            '''
+            bat 'docker-compose down --volumes --remove-orphans || exit /b 0'
         }
         success { echo 'Tests passed ✅' }
-        failure { echo 'Tests failed ❌' }
+        failure { 
+            echo 'Tests failed ❌'
+            bat '''
+                echo "=== Backend Logs ==="
+                docker-compose logs backenddd || exit /b 0
+            '''
+        }
     }
 }
