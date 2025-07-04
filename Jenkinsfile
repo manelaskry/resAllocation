@@ -26,8 +26,8 @@ pipeline {
                     echo 'Setting up environment...'
                     // Clean up any existing containers
                     bat '''
-                        docker-compose -p %COMPOSE_PROJECT_NAME% down --volumes --remove-orphans || echo "No containers to clean"
-                        docker system prune -f || echo "Cleanup completed"
+                        docker-compose -p %COMPOSE_PROJECT_NAME% down --volumes --remove-orphans 2>nul || echo "No containers to clean"
+                        docker system prune -f 2>nul || echo "Cleanup completed"
                     '''
                 }
             }
@@ -37,21 +37,80 @@ pipeline {
             steps {
                 echo 'Building and starting services...'
                 bat '''
-                    REM Build and start only the necessary services for testing
-                    docker-compose -p %COMPOSE_PROJECT_NAME% up -d postgres postgres_test
+                    REM Start all services and wait using docker-compose built-in waiting
+                    docker-compose -p %COMPOSE_PROJECT_NAME% up -d
                     
-                    REM Wait for databases to be ready
-                    echo "Waiting for databases to be ready..."
-                    timeout 120 docker-compose -p %COMPOSE_PROJECT_NAME% exec -T postgres pg_isready -U root -d app || (echo "Postgres main not ready" && exit 1)
-                    timeout 120 docker-compose -p %COMPOSE_PROJECT_NAME% exec -T postgres_test pg_isready -U root -d app_test || (echo "Postgres test not ready" && exit 1)
+                    REM Give containers time to start
+                    echo "Waiting for services to start..."
+                    ping 127.0.0.1 -n 31 > nul
                     
-                    REM Start backend service
-                    docker-compose -p %COMPOSE_PROJECT_NAME% up -d backenddd
-                    
-                    REM Wait for backend to be ready
-                    echo "Waiting for backend to be ready..."
-                    timeout 180 docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd sh -c "until [ -f /tmp/setup_done ]; do sleep 5; done" || (echo "Backend setup timeout" && exit 1)
+                    REM Check if containers are running
+                    docker-compose -p %COMPOSE_PROJECT_NAME% ps
                 '''
+            }
+        }
+        
+        stage('Wait for Database') {
+            steps {
+                echo 'Waiting for databases to be ready...'
+                script {
+                    // Retry mechanism for database readiness
+                    def maxAttempts = 30
+                    def attempt = 0
+                    def dbReady = false
+                    
+                    while (!dbReady && attempt < maxAttempts) {
+                        try {
+                            bat '''
+                                docker-compose -p %COMPOSE_PROJECT_NAME% exec -T postgres pg_isready -U root -d app
+                                docker-compose -p %COMPOSE_PROJECT_NAME% exec -T postgres_test pg_isready -U root -d app_test
+                            '''
+                            dbReady = true
+                            echo "Databases are ready!"
+                        } catch (Exception e) {
+                            attempt++
+                            echo "Database not ready yet, attempt ${attempt}/${maxAttempts}"
+                            sleep(5)
+                        }
+                    }
+                    
+                    if (!dbReady) {
+                        error "Databases failed to start after ${maxAttempts} attempts"
+                    }
+                }
+            }
+        }
+        
+        stage('Wait for Backend') {
+            steps {
+                echo 'Waiting for backend to be ready...'
+                script {
+                    def maxAttempts = 60
+                    def attempt = 0
+                    def backendReady = false
+                    
+                    while (!backendReady && attempt < maxAttempts) {
+                        try {
+                            bat '''
+                                docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd test -f /tmp/setup_done
+                            '''
+                            backendReady = true
+                            echo "Backend is ready!"
+                        } catch (Exception e) {
+                            attempt++
+                            echo "Backend not ready yet, attempt ${attempt}/${maxAttempts}"
+                            sleep(3)
+                        }
+                    }
+                    
+                    if (!backendReady) {
+                        bat '''
+                            echo "Backend setup failed, showing logs:"
+                            docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd
+                        '''
+                        error "Backend failed to start after ${maxAttempts} attempts"
+                    }
+                }
             }
         }
         
@@ -59,20 +118,17 @@ pipeline {
             steps {
                 echo 'Preparing test environment...'
                 bat '''
-                    REM Check if Composer dependencies are installed
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer install --no-interaction --optimize-autoloader --no-dev
-                    
-                    REM Install dev dependencies (including PHPUnit)
+                    REM Install dependencies
                     docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd composer install --no-interaction --optimize-autoloader
                     
-                    REM Create test database schema
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:database:create --env=test --if-not-exists || echo "Test database already exists"
+                    REM Create test database (ignore if exists)
+                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:database:create --env=test --if-not-exists || echo "Test database creation handled"
                     
-                    REM Run migrations for test database
+                    REM Run migrations
                     docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:migrations:migrate --env=test --no-interaction || echo "Migrations completed"
                     
-                    REM Load fixtures if available
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:fixtures:load --env=test --no-interaction || echo "No fixtures to load"
+                    REM Load fixtures (optional)
+                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd php bin/console doctrine:fixtures:load --env=test --no-interaction || echo "Fixtures loaded or not available"
                 '''
             }
         }
@@ -81,24 +137,15 @@ pipeline {
             steps {
                 echo 'Running PHPUnit tests...'
                 bat '''
-                    REM Verify PHPUnit installation
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --version
+                    REM Verify PHPUnit is available
+                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --version || (
+                        echo "PHPUnit not found, checking installation..."
+                        docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ls -la vendor/bin/
+                        exit /b 1
+                    )
                     
-                    REM Run tests with proper configuration
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --configuration phpunit.xml.dist --testdox --coverage-text
-                '''
-            }
-        }
-        
-        stage('Collect Test Results') {
-            steps {
-                echo 'Collecting test results...'
-                bat '''
-                    REM Generate JUnit XML report if configured
-                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --configuration phpunit.xml.dist --log-junit test-results.xml || echo "JUnit XML generation failed"
-                    
-                    REM Copy test results out of container
-                    docker-compose -p %COMPOSE_PROJECT_NAME% cp backenddd:/var/www/test-results.xml ./test-results.xml || echo "No test results to copy"
+                    REM Run the tests
+                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd ./vendor/bin/phpunit --testdox --stop-on-failure
                 '''
             }
         }
@@ -109,40 +156,33 @@ pipeline {
             echo 'Cleaning up...'
             bat '''
                 REM Show logs for debugging
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd || echo "No logs available"
+                echo "=== Backend Logs ==="
+                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=50 backenddd || echo "No backend logs"
                 
-                REM Clean up containers and volumes
+                echo "=== Postgres Logs ==="
+                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=20 postgres || echo "No postgres logs"
+                
+                echo "=== Test Postgres Logs ==="
+                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=20 postgres_test || echo "No test postgres logs"
+                
+                REM Clean up
                 docker-compose -p %COMPOSE_PROJECT_NAME% down --volumes --remove-orphans || echo "Cleanup completed"
             '''
-            
-            // Archive test results if available
-            script {
-                if (fileExists('test-results.xml')) {
-                    junit 'test-results.xml'
-                }
-            }
         }
         
         success {
             echo 'All tests passed! ✅'
-            script {
-                // Send notification if configured
-                echo 'Tests completed successfully'
-            }
         }
         
         failure {
             echo 'Tests failed ❌'
             bat '''
-                REM Show detailed logs for debugging
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=50 backenddd || echo "No logs available"
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=50 postgres || echo "No postgres logs"
-                docker-compose -p %COMPOSE_PROJECT_NAME% logs --tail=50 postgres_test || echo "No postgres_test logs"
+                echo "=== Container Status ==="
+                docker-compose -p %COMPOSE_PROJECT_NAME% ps || echo "No containers running"
+                
+                echo "=== Detailed Backend Logs ==="
+                docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd || echo "No detailed logs available"
             '''
-        }
-        
-        unstable {
-            echo 'Tests completed with warnings ⚠️'
         }
     }
 }
