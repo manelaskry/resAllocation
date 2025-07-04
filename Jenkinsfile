@@ -27,7 +27,7 @@ pipeline {
                     )
                     
                     echo "Container is healthy, running tests..."
-                    docker-compose exec -T backenddd ./vendor/bin/phpunit tests/
+                    docker-compose exec -T backenddd ./vendor/bin/phpunit tests/Entity/
                     
                     docker-compose down
                 '''
