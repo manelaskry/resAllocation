@@ -11,15 +11,17 @@ pipeline {
                 git branch: 'master', url: 'https://github.com/manelaskry/resAllocation.git'
                 
                 bat '''
-                    REM Start containers first
                     docker-compose up -d backenddd
-                    ping 127.0.0.1 -n 61 > nul
                     
-                    REM Install composer INSIDE the running container
-                    docker-compose exec -T backenddd curl -sS https://getcomposer.org/installer | php -- --install-dir=/usr/local/bin --filename=composer
+                    REM Wait for setup to complete (check for setup_done marker)
+                    :wait_setup
+                    docker-compose exec -T backenddd test -f /tmp/setup_done && goto setup_complete
+                    echo "Waiting for container setup to complete..."
+                    ping 127.0.0.1 -n 11 > nul
+                    goto wait_setup
                     
-                    REM Install dependencies INSIDE the container
-                    docker-compose exec -T backenddd composer update --no-interaction
+                    :setup_complete
+                    echo "Container setup completed!"
                     
                     REM Now run tests
                     docker-compose exec -T backenddd ./vendor/bin/phpunit tests/Entity/
@@ -28,13 +30,5 @@ pipeline {
                 '''
             }
         }
-    }
-    
-    post {
-        always {
-            bat 'docker-compose down || exit /b 0'
-        }
-        success { echo '34 Entity tests passed! ✅' }
-        failure { echo 'Tests failed ❌' }
     }
 }
