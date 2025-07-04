@@ -18,13 +18,13 @@ services:
       timeout: 5s
       retries: 5
 
-  backend:
+  backenddd:  # ← Changed from 'backend' to 'backenddd'
     image: php:8.3-fpm
     container_name: my_app_backend
     working_dir: /var/www
     volumes:
-      - ./backend:/var/www
-      - ./backend/.env.docker:/var/www/.env
+      - ./backenddd:/var/www  # ← Changed from './backend' to './backenddd'
+      - ./backenddd/.env.docker:/var/www/.env  # ← Changed path
       - backend_vendor:/var/www/vendor  
     environment:
       - PHP_OPCACHE_VALIDATE_TIMESTAMPS=1 
@@ -79,7 +79,7 @@ services:
       - REACT_APP_API_URL=http://localhost:8081/api 
       - WATCHPACK_POLLING=true  
     depends_on:
-      backend:  
+      backenddd:  # ← Changed from 'backend' to 'backenddd'
         condition: service_healthy
     networks:
       - app_network
@@ -90,10 +90,10 @@ services:
     ports:
       - "8081:80"
     volumes:
-      - ./backend:/var/www
-      - ./backend/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf 
+      - ./backenddd:/var/www  # ← Changed from './backend' to './backenddd'
+      - ./backenddd/docker/nginx/default.conf:/etc/nginx/conf.d/default.conf  # ← Changed path
     depends_on:
-      backend:
+      backenddd:  # ← Changed from 'backend' to 'backenddd'
         condition: service_healthy
       frontend:  
         condition: service_started
