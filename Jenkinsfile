@@ -4,7 +4,7 @@ pipeline {
     stages {
         stage('Clone Repository') {
             steps {
-                git url: 'https://github.com/yourusername/your-repo.git'
+                git url: 'https://github.com/manelaskry/resAllocation.git'
             }
         }
 
