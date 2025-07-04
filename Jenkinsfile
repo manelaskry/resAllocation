@@ -37,15 +37,15 @@ pipeline {
             steps {
                 echo 'Building and starting services...'
                 bat '''
-                    REM Start all services and wait using docker-compose built-in waiting
+                    REM Start all services
                     docker-compose -p %COMPOSE_PROJECT_NAME% up -d
                     
-                    REM Give containers time to start
-                    echo "Waiting for services to start..."
-                    ping 127.0.0.1 -n 31 > nul
-                    
-                    REM Check if containers are running
+                    REM Wait for services to be healthy
+                    echo "Waiting for services to be healthy..."
                     docker-compose -p %COMPOSE_PROJECT_NAME% ps
+                    
+                    REM Wait for backend to be healthy (not just running)
+                    timeout /t 60 /nobreak
                 '''
             }
         }
@@ -91,11 +91,24 @@ pipeline {
                     
                     while (!backendReady && attempt < maxAttempts) {
                         try {
-                            bat '''
-                                docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd test -f /tmp/setup_done
-                            '''
-                            backendReady = true
-                            echo "Backend is ready!"
+                            // First check if container is running
+                            def containerStatus = bat(
+                                script: 'docker-compose -p %COMPOSE_PROJECT_NAME% ps -q backenddd',
+                                returnStdout: true
+                            ).trim()
+                            
+                            if (containerStatus) {
+                                // Container exists, now check if setup is done
+                                bat '''
+                                    docker-compose -p %COMPOSE_PROJECT_NAME% exec -T backenddd test -f /tmp/setup_done
+                                '''
+                                backendReady = true
+                                echo "Backend is ready!"
+                            } else {
+                                echo "Backend container not found, waiting..."
+                                sleep(3)
+                                attempt++
+                            }
                         } catch (Exception e) {
                             attempt++
                             echo "Backend not ready yet, attempt ${attempt}/${maxAttempts}"
@@ -107,6 +120,8 @@ pipeline {
                         bat '''
                             echo "Backend setup failed, showing logs:"
                             docker-compose -p %COMPOSE_PROJECT_NAME% logs backenddd
+                            echo "Container status:"
+                            docker-compose -p %COMPOSE_PROJECT_NAME% ps
                         '''
                         error "Backend failed to start after ${maxAttempts} attempts"
                     }
