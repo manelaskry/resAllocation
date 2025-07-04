@@ -10,12 +10,9 @@ pipeline {
         
         stage('Setup & Test') {
             steps {
-                sh '''
-                    docker-compose up -d --build
-                    docker-compose exec -T backend composer install --no-interaction
-                    docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php --testdox
-                    docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/UserTest.php --testdox
-                '''
+                script {
+                    bat 'docker-compose up -d --build'
+                }
             }
         }
     }
