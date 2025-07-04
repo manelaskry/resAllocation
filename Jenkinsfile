@@ -45,7 +45,7 @@ pipeline {
                     docker-compose -p %COMPOSE_PROJECT_NAME% ps
                     
                     REM Wait for backend to be healthy (not just running)
-                    timeout /t 60 /nobreak
+                    ping 127.0.0.1 -n 61 > nul
                 '''
             }
         }
