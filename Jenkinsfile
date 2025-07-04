@@ -17,17 +17,36 @@ pipeline {
                 bat '''
                     docker-compose up -d backenddd
                     
-                    REM Wait for healthy status
+                    REM Wait for container
                     :wait_loop
                     docker-compose ps backenddd | findstr "healthy" >nul
                     if errorlevel 1 (
-                        echo "Waiting for container to be healthy..."
+                        echo "Waiting for container..."
                         ping 127.0.0.1 -n 6 > nul
                         goto wait_loop
                     )
                     
-                    echo "Container is healthy, running tests..."
-                    docker-compose exec -T backenddd ./vendor/bin/phpunit tests/Entity/
+                    echo "=== DEBUGGING ==="
+                    echo "Current directory:"
+                    docker-compose exec -T backenddd pwd
+                    
+                    echo "Files in current directory:"
+                    docker-compose exec -T backenddd ls -la
+                    
+                    echo "Checking vendor folder:"
+                    docker-compose exec -T backenddd ls -la vendor/ || echo "No vendor folder"
+                    
+                    echo "Checking vendor/bin:"
+                    docker-compose exec -T backenddd ls -la vendor/bin/ || echo "No vendor/bin folder"
+                    
+                    echo "Looking for composer.json:"
+                    docker-compose exec -T backenddd ls -la composer.json || echo "No composer.json"
+                    
+                    echo "=== INSTALLING DEPENDENCIES ==="
+                    docker-compose exec -T backenddd composer install --no-interaction
+                    
+                    echo "=== RUNNING TESTS ==="
+                    docker-compose exec -T backenddd ./vendor/bin/phpunit tests/
                     
                     docker-compose down
                 '''
