@@ -1,6 +1,5 @@
 pipeline {
     agent any
-
     
     stages {
         stage('Checkout') {
@@ -9,19 +8,14 @@ pipeline {
             }
         }
         
-        stage('Backend - Install Dependencies') {
+        stage('Setup & Test') {
             steps {
-                dir('backend') {
-                    sh 'composer install'
-                }
-            }
-        }
-        
-        stage('Backend - Run PHPUnit Tests') {
-            steps {
-                dir('backend') {
-                    sh 'vendor/bin/phpunit tests/'
-                }
+                sh '''
+                    docker-compose up -d --build
+                    docker-compose exec -T backend composer install --no-interaction
+                    docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php --testdox
+                    docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/UserTest.php --testdox
+                '''
             }
         }
     }
@@ -29,6 +23,7 @@ pipeline {
     post {
         always {
             echo 'Tests terminés!'
+            sh 'docker-compose down'
         }
         success {
             echo 'Tous les tests sont passés ✅'
