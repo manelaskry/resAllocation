@@ -8,31 +8,35 @@ pipeline {
             }
         }
         
-        stage('Docker Build') {
+        stage('Start Services') {
             steps {
-                bat '''
-                    docker-compose down --volumes --remove-orphans || exit /b 0
-                    docker container prune -f || exit /b 0
-                    docker-compose up -d --build
-                '''
+                timeout(time: 5, unit: 'MINUTES') {
+                    bat '''
+                        docker-compose down || exit /b 0
+                        docker-compose up -d
+                        timeout /t 30 /nobreak > nul
+                        docker-compose ps
+                    '''
+                }
             }
         }
         
         stage('Install Dependencies') {
             steps {
-                bat 'docker-compose exec -T backend composer install --no-interaction'
+                timeout(time: 5, unit: 'MINUTES') {
+                    bat 'docker-compose exec -T backend composer install --no-interaction'
+                }
             }
         }
         
-        stage('Run Project Tests') {
+        stage('Run Tests') {
             steps {
-                bat 'docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php --testdox'
-            }
-        }
-        
-        stage('Run User Tests') {
-            steps {
-                bat 'docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/UserTest.php --testdox'
+                timeout(time: 5, unit: 'MINUTES') {
+                    bat '''
+                        docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/ProjectTest.php --testdox
+                        docker-compose exec -T backend ./vendor/bin/phpunit tests/Entity/UserTest.php --testdox
+                    '''
+                }
             }
         }
     }
@@ -40,7 +44,7 @@ pipeline {
     post {
         always {
             echo 'Tests terminés!'
-            bat 'docker-compose down --volumes --remove-orphans || exit /b 0'
+            bat 'docker-compose down || exit /b 0'
         }
         success {
             echo 'Tous les tests sont passés ✅'
